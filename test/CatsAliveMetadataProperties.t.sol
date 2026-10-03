@@ -24,10 +24,13 @@ contract CatsAliveMetadataPropertiesTest is Test {
     }
 
     /// @dev Parse actual SVG output instead of reconstructing expected strings from renderer helpers.
+    /// Populations above 64 use the repeated tile, so the painted rectangles carry the count.
     /// forge-config: default.fuzz.runs = 1000
     function testFuzz_PaintedSvgAreaContainsExactlyTheRequestedWholeCells(uint32 input, bytes32 seed) public view {
-        uint256 count = bound(input, 1, 100_000);
+        uint256 count = bound(input, 65, 100_000);
         string memory svg = renderer.field(count, seed);
+        assertNotEq(vm.indexOf(svg, '<pattern id="catsPattern"'), type(uint256).max, "large cohorts must tile");
+        assertEq(_occurrences(svg, "<use "), 16, "tile must hold exactly sixteen cats");
         string memory full = _suffix(svg, '<rect width="');
         string memory tail = _suffix(svg, '<rect y="');
         uint256 fullWidth = _attribute(full, "width");
@@ -50,6 +53,59 @@ contract CatsAliveMetadataPropertiesTest is Test {
         assertLt(tailWidth, viewWidth);
         if (tailWidth > 0) assertEq(tailY + tailHeight, viewHeight);
         else assertEq(fullHeight, viewHeight);
+    }
+
+    /// @dev Populations of at most 64 serialize one independently seeded sprite per cat with no tile. Every
+    /// parsed bounding box must sit inside its own grid cell with a gutter, and no two boxes may touch.
+    /// forge-config: default.fuzz.runs = 1000
+    function testFuzz_SmallCohortSerializesEveryCatInItsOwnDisjointCell(uint8 input, bytes32 seed) public view {
+        uint256 count = bound(input, 1, 64);
+        string memory svg = renderer.field(count, seed);
+        assertEq(vm.indexOf(svg, "<pattern"), type(uint256).max, "small cohorts must not tile");
+        assertEq(vm.indexOf(svg, "<rect"), type(uint256).max, "small cohorts paint sprites, not rectangles");
+        assertNotEq(vm.indexOf(svg, '<g id="cats">'), type(uint256).max, "direct sprite group missing");
+        bytes memory viewBox = bytes(_suffix(svg, 'viewBox="0 0 '));
+        (uint256 viewWidth, uint256 cursor) = _readUint(viewBox, bytes('viewBox="0 0 ').length);
+        (uint256 viewHeight,) = _readUint(viewBox, cursor + 1);
+        assertEq(viewWidth % 100, 0);
+        assertEq(viewHeight % 100, 0);
+        uint256 columns = viewWidth / 100;
+        uint256 rows = viewHeight / 100;
+        assertGe(columns * rows, count, "grid must hold every cat");
+        assertLt(columns * (rows - 1), count, "grid must not reserve an empty row");
+
+        uint256[] memory xs = new uint256[](count);
+        uint256[] memory ys = new uint256[](count);
+        uint256[] memory sizes = new uint256[](count);
+        bool[] memory occupied = new bool[](columns * rows);
+        string memory remaining = svg;
+        for (uint256 i; i < count; ++i) {
+            remaining = _suffix(remaining, "translate(");
+            bytes memory transform = bytes(remaining);
+            (xs[i], cursor) = _readUint(transform, bytes("translate(").length);
+            (ys[i],) = _readUint(transform, cursor + 1);
+            remaining = _suffix(remaining, "scale(0.");
+            (sizes[i],) = _readUint(bytes(remaining), bytes("scale(0.").length);
+            assertGt(sizes[i], 0);
+            assertLt(sizes[i], 100);
+            assertGt(xs[i] % 100, 0, "sprite touches its cell's left edge");
+            assertGt(ys[i] % 100, 0, "sprite touches its cell's top edge");
+            assertLt(xs[i] % 100 + sizes[i], 100, "sprite touches its cell's right edge");
+            assertLt(ys[i] % 100 + sizes[i], 100, "sprite touches its cell's bottom edge");
+            assertLt(xs[i], viewWidth, "sprite outside the viewBox");
+            assertLt(ys[i], viewHeight, "sprite outside the viewBox");
+            uint256 cell = (ys[i] / 100) * columns + xs[i] / 100;
+            assertFalse(occupied[cell], "two serialized sprites share a cell");
+            occupied[cell] = true;
+        }
+        assertEq(vm.indexOf(remaining, "translate("), type(uint256).max, "extra serialized sprite");
+        for (uint256 i; i < count; ++i) {
+            for (uint256 j = i + 1; j < count; ++j) {
+                bool separated = xs[i] + sizes[i] < xs[j] || xs[j] + sizes[j] < xs[i] || ys[i] + sizes[i] < ys[j]
+                    || ys[j] + sizes[j] < ys[i];
+                assertTrue(separated, "serialized sprites overlap or touch");
+            }
+        }
     }
 
     /// @dev Check the serialized transforms used by the browser, not just the cell helper's return values.
@@ -119,6 +175,39 @@ contract CatsAliveMetadataPropertiesTest is Test {
         assertEq(cats.animationHTML(1), firstHtml);
     }
 
+    /// @dev The branch switch must be invisible in what the spec requires: exactly `count` painted cats,
+    /// the live number and the caption, whichever renderer path the token image takes.
+    function test_RenderingBranchSwitchesAtSixtyFourCatsThroughTokenImage() public {
+        CatsAlive cats = new CatsAlive(address(this), address(this), 100_000, 1_700_000_000, 3600);
+        vm.prank(address(0xA11CE));
+        cats.mint();
+
+        cats.publishCount(64, uint64(vm.getBlockTimestamp()), keccak256("sixty-four"));
+        string memory direct = cats.imageSVG(1);
+        assertEq(_occurrences(direct, "<use "), 64, "every one of 64 cats gets its own sprite");
+        assertEq(vm.indexOf(direct, "<pattern"), type(uint256).max);
+        assertEq(vm.indexOf(direct, "<rect y="), type(uint256).max);
+        assertTrue(vm.contains(direct, 'font-size="36pt">64</text>'));
+        assertTrue(vm.contains(direct, 'viewBox="0 0 800 800"'), "64 cats fill an 8x8 grid");
+
+        vm.warp(vm.getBlockTimestamp() + 1);
+        cats.publishCount(65, uint64(vm.getBlockTimestamp()), keccak256("sixty-five"));
+        string memory tiled = cats.imageSVG(1);
+        assertEq(_occurrences(tiled, "<use "), 16, "65 cats switch to the bounded 4x4 tile");
+        assertTrue(vm.contains(tiled, '<pattern id="catsPattern" width="400" height="400"'));
+        assertTrue(vm.contains(tiled, '<rect width="900" height="700"/><rect y="700" width="200" height="100"/>'));
+        assertTrue(vm.contains(tiled, 'font-size="36pt">65</text>'));
+        assertTrue(vm.contains(tiled, 'viewBox="0 0 900 800"'), "65 cats need 9 columns and 8 rows");
+
+        vm.warp(vm.getBlockTimestamp() + 1);
+        cats.publishCount(1, uint64(vm.getBlockTimestamp()), keccak256("one"));
+        string memory single = cats.imageSVG(1);
+        assertEq(_occurrences(single, "<use "), 1);
+        assertTrue(vm.contains(single, 'viewBox="0 0 100 100"'));
+        assertTrue(vm.contains(single, 'font-size="36pt">1</text>'));
+        assertTrue(vm.contains(cats.animationHTML(1), "const initial={count:1,"), "HTML seeds the same count");
+    }
+
     function test_UnknownAndConfirmedZeroHaveDifferentVisibleMeaning() public {
         CatsAlive cats = new CatsAlive(address(this), address(this), 1, 1_700_000_000, 60);
         vm.prank(address(0xA11CE));
@@ -132,6 +221,22 @@ contract CatsAliveMetadataPropertiesTest is Test {
         assertFalse(vm.contains(zero, 'id="cats"'));
         assertTrue(vm.contains(zero, 'fill="#DBFEE6" text-anchor="middle"'));
         assertTrue(vm.contains(zero, 'y="932" font-size="30pt">Fren Pet Cats Still Alive</text>'));
+    }
+
+    function _occurrences(string memory value, string memory needle) private pure returns (uint256 count) {
+        bytes memory haystack = bytes(value);
+        bytes memory target = bytes(needle);
+        if (target.length > haystack.length) return 0;
+        for (uint256 i; i <= haystack.length - target.length; ++i) {
+            bool matches = true;
+            for (uint256 j; j < target.length; ++j) {
+                if (haystack[i + j] != target[j]) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) ++count;
+        }
     }
 
     function _attribute(string memory value, string memory name) private pure returns (uint256 number) {

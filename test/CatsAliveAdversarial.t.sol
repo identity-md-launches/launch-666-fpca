@@ -306,6 +306,41 @@ contract CatsAliveAdversarialTest is Test {
         assertEq(cats.aliveCats(), 30);
     }
 
+    /// @dev The constructor no longer compares the original mint date with the deployment clock. A date in the
+    /// future deploys, mints and renders as unreported, but no report can be accepted until that date arrives,
+    /// and the owner has no way to correct the immutable value. Deployers must verify the date before launch.
+    function test_futureOriginalMintDateDeploysButBlocksEveryReportUntilThatDate() public {
+        uint64 future = uint64(vm.getBlockTimestamp() + 1 days);
+        CatsAlive later = new CatsAlive(ADMIN, REPORTER, POPULATION, future, MAX_AGE);
+        assertEq(later.originalMintTimestamp(), future);
+        vm.prank(HOLDER);
+        assertEq(later.mint(), 1);
+        assertTrue(vm.contains(later.imageSVG(1), 'font-size="36pt">--</text>'));
+
+        vm.startPrank(REPORTER);
+        vm.expectRevert(CatsAlive.InvalidReport.selector);
+        later.publishCount(1, uint64(vm.getBlockTimestamp()), EVIDENCE);
+        vm.expectRevert(CatsAlive.InvalidReport.selector);
+        later.publishCount(1, future - 1, EVIDENCE);
+        vm.expectRevert(CatsAlive.InvalidReport.selector);
+        later.publishCount(1, future, EVIDENCE);
+        vm.stopPrank();
+        assertEq(later.reportStatus(), "unreported");
+
+        vm.warp(future - 1);
+        vm.prank(REPORTER);
+        vm.expectRevert(CatsAlive.InvalidReport.selector);
+        later.publishCount(1, future, EVIDENCE);
+
+        vm.warp(future);
+        vm.prank(REPORTER);
+        later.publishCount(1, future, EVIDENCE);
+        assertEq(later.aliveCats(), 1);
+        assertEq(later.observedAt(), future);
+        assertEq(later.reportStatus(), "fresh");
+        assertTrue(vm.contains(later.imageSVG(1), 'font-size="36pt">1</text>'));
+    }
+
     function test_unreportedZeroAndMaximumIntegersAreRejectedWithoutPanic() public {
         vm.startPrank(REPORTER);
         vm.expectRevert(CatsAlive.InvalidReport.selector);
