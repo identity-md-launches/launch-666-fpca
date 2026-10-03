@@ -39,12 +39,17 @@ image. Marketplace caching can prevent a new fetch. Consequently **a fresh
 count and new jumble on every view cannot be guaranteed in every marketplace**.
 An active reporter keeps the static fallback current; a compatible interactive
 viewer obtains the latest indexed count independently.
+After `maxReportAge`, the SVG still draws the last reported count and its
+sprites, labeled `stale report` with the observation timestamp in the top
+margin. That headline is a historical snapshot, not a claim of the current
+population. Check the status and timestamp before interpreting it as current.
 
 Every count has exactly that many sprites. Each cat has a varying size and
 jitter within its own cell, with a strictly positive margin, so cats never
-touch or overlap. The SVG repeats a randomized 4-by-4 tile and paints only
-whole cells, including the partial final row. This keeps RPC computation and
-metadata size bounded. The HTML gives every cat an independently randomized
+touch or overlap. For up to 64 cats, the SVG independently seeds each sprite's
+size and position. Above 64, it repeats a randomized 4-by-4 tile and paints only
+whole cells, including the partial final row. This fallback keeps RPC computation
+and metadata size bounded. The HTML gives every cat an independently randomized
 placement within the same spacing rules. At very large populations the cats
 necessarily become small; geometric separation does not imply legibility at
 100,000 cats on a 1,000px canvas. Randomness is cosmetic and confers no value or
@@ -123,7 +128,7 @@ constructor(
 | `initialOwner` | Explicit administration wallet supplied by the launch owner (`$owner` in a launch manifest); nonzero. Never infer it from a factory's `msg.sender`. |
 | `initialReporter` | Explicit nonzero account that will verify and publish observations; may equal owner if that is the chosen operating model. |
 | `originalCats` | Verified original closed game-cat cohort, from 1 through 100,000. This bounds the **reported game population**, never FPCA supply. |
-| `originalMintTimestamp` | Verified original mint date as UTC Unix seconds, nonzero, no later than deployment, and before 2100-01-01. The displayed date is UTC. |
+| `originalMintTimestamp` | Verified original mint date as UTC Unix seconds, nonzero and before 2100-01-01. The displayed date is UTC. Historical accuracy is the deployer's responsibility; the constructor does not compare this date to the deployment clock, so offline rehearsals can use timestamp 1. Reports still require observations at or after this date and no later than the current block time. |
 | `maxReportAge` | Staleness threshold, 60 through 604,800 seconds; choose an operational cadence comfortably shorter than this. |
 
 All configuration is complete in the constructor. No initialization call,
@@ -142,7 +147,11 @@ deploy/send transactions. No constructor depends on `msg.sender` ownership.
 - **Mint:** in the verified block explorer's Write Contract tab, connect a
   wallet and call `mint()` with **zero ETH**. Repeat without a wallet or supply
   limit. Each call creates the next number, starting at 1. The caller pays gas.
-  Contract wallets must implement `IERC721Receiver`.
+  Minting uses the ERC-721 receiver check: any caller with code must implement
+  `IERC721Receiver`, including an EOA with EIP-7702 delegated code. If its code
+  lacks the hook or rejects receipt, minting reverts without increasing supply.
+  Such an account must use compatible receiver code or remove its delegation
+  before calling `mint()` from the explorer. Accounts without code need no hook.
 - **Owner:** can `pause()` and `unpause()` **minting only**, and replace the
   reporter with `setReporter(address)`. Existing transfers, approvals, metadata
   and report updates remain available while paused. Ownership uses

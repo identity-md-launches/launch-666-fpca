@@ -26,26 +26,28 @@ library CatRenderer {
         rows = (count + columns - 1) / columns;
     }
 
-    /// @dev Repeating a 4x4 tile bounds EVM work even for 100,000 cats. Each painted cell contains exactly one cat.
-    /// The final row is an integer number of cells, so there are no partial or extra cats.
+    /// @dev Small cohorts get an independently seeded cell per cat. Above 64 cats, a repeating 4x4 tile bounds
+    /// EVM work even for 100,000 cats. Each painted cell contains exactly one cat; final rows contain whole cells.
     function field(uint256 count, bytes32 seed) internal pure returns (string memory) {
         if (count == 0) return "";
         (uint256 columns, uint256 rows) = grid(count);
+        uint256 tileColumns = count <= 64 ? columns : 4;
+        uint256 tileCount = count <= 64 ? count : 16;
         string memory tile;
-        for (uint256 i; i < 16; ++i) {
+        for (uint256 i; i < tileCount; ++i) {
             (uint256 x, uint256 y, uint256 size) = cell(seed, i);
             tile = string.concat(
                 tile,
                 '<use xlink:href="#cat" transform="translate(',
-                (x + (i % 4) * 100).toString(),
+                (x + (i % tileColumns) * 100).toString(),
                 " ",
-                (y + (i / 4) * 100).toString(),
+                (y + (i / tileColumns) * 100).toString(),
                 ") scale(0.",
                 size.toString(),
                 ')"/>'
             );
         }
-        return string.concat(
+        string memory start = string.concat(
             '<svg x="32" y="54" width="936" height="726" viewBox="0 0 ',
             (columns * 100).toString(),
             " ",
@@ -53,7 +55,12 @@ library CatRenderer {
             '" preserveAspectRatio="xMidYMid meet">'
             '<defs><image id="cat" width="100" height="91.3043478261" xlink:href="',
             CAT,
-            '"/><pattern id="catsPattern" width="400" height="400" patternUnits="userSpaceOnUse">',
+            '"/>'
+        );
+        if (count <= 64) return string.concat(start, '</defs><g id="cats">', tile, "</g></svg>");
+        return string.concat(
+            start,
+            '<pattern id="catsPattern" width="400" height="400" patternUnits="userSpaceOnUse">',
             tile,
             '</pattern></defs><g id="cats" fill="url(#catsPattern)">' '<rect width="',
             (columns * 100).toString(),

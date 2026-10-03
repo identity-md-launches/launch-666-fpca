@@ -42,15 +42,17 @@ contract RendererTest is Test {
         // Cat height is only 21/23 of its width, so these square bounds are conservative.
     }
 
-    function testFuzz_AllTileBoundingBoxesAreDisjoint(bytes32 seed) public view {
-        for (uint256 i; i < 16; ++i) {
+    function testFuzz_AllBoundingBoxesAreDisjoint(bytes32 seed, uint8 input) public view {
+        uint256 count = bound(input, 1, 64);
+        (uint256 columns,) = renderer.grid(count);
+        for (uint256 i; i < count; ++i) {
             (uint256 xi, uint256 yi, uint256 si) = renderer.cell(seed, i);
-            xi += (i % 4) * 100;
-            yi += (i / 4) * 100;
-            for (uint256 j = i + 1; j < 16; ++j) {
+            xi += (i % columns) * 100;
+            yi += (i / columns) * 100;
+            for (uint256 j = i + 1; j < count; ++j) {
                 (uint256 xj, uint256 yj, uint256 sj) = renderer.cell(seed, j);
-                xj += (j % 4) * 100;
-                yj += (j / 4) * 100;
+                xj += (j % columns) * 100;
+                yj += (j / columns) * 100;
                 assertTrue(xi + si < xj || xj + sj < xi || yi + si < yj || yj + sj < yi);
             }
         }
@@ -68,8 +70,34 @@ contract RendererTest is Test {
         assertLt(tail, columns);
     }
 
+    function test_SmallPopulationsRenderEveryIndependentlySeededCat() public view {
+        bytes32 seed = keccak256("x");
+        uint256[7] memory counts = [uint256(1), 16, 17, 34, 37, 63, 64];
+        for (uint256 c; c < counts.length; ++c) {
+            uint256 count = counts[c];
+            (uint256 columns,) = renderer.grid(count);
+            string memory output = renderer.field(count, seed);
+            assertEq(_occurrences(output, "<use "), count);
+            assertFalse(_contains(output, "<pattern"));
+            for (uint256 i; i < count; ++i) {
+                (uint256 x, uint256 y, uint256 size) = renderer.cell(seed, i);
+                string memory expected = string.concat(
+                    '<use xlink:href="#cat" transform="translate(',
+                    (x + (i % columns) * 100).toString(),
+                    " ",
+                    (y + (i / columns) * 100).toString(),
+                    ") scale(0.",
+                    size.toString(),
+                    ')"/>'
+                );
+                assertTrue(_contains(output, expected), "Every cat uses its own seeded cell");
+            }
+            assertLt(bytes(output).length, 6_000, "Direct rendering has a fixed size ceiling");
+        }
+    }
+
     function test_RenderedRectanglesMatchPopulationIncludingPartialRows() public view {
-        uint256[9] memory counts = [uint256(1), 3, 16, 17, 34, 37, 100, 99_999, 100_000];
+        uint256[5] memory counts = [uint256(65), 99, 100, 99_999, 100_000];
         for (uint256 i; i < counts.length; ++i) {
             uint256 n = counts[i];
             (uint256 columns,) = renderer.grid(n);
@@ -87,7 +115,17 @@ contract RendererTest is Test {
             );
             assertTrue(_contains(output, expected));
             assertTrue(_contains(output, 'patternUnits="userSpaceOnUse"'));
+            assertEq(_occurrences(output, "<use "), 16, "Large populations retain the bounded tile");
             assertLt(bytes(output).length, 4_000, "Rendering must not grow linearly with population");
+        }
+    }
+
+    function test_RenderingGasRemainsBoundedAtBothBranchLimits() public view {
+        uint256[3] memory counts = [uint256(64), 65, 100_000];
+        for (uint256 i; i < counts.length; ++i) {
+            uint256 beforeCall = gasleft();
+            renderer.field(counts[i], bytes32(uint256(1)));
+            assertLt(beforeCall - gasleft(), 1_000_000, "Field rendering must remain practical for RPC reads");
         }
     }
 
@@ -122,5 +160,21 @@ contract RendererTest is Test {
             if (matches) return true;
         }
         return false;
+    }
+
+    function _occurrences(string memory haystack, string memory needle) private pure returns (uint256 count) {
+        bytes memory a = bytes(haystack);
+        bytes memory b = bytes(needle);
+        if (b.length > a.length) return 0;
+        for (uint256 i; i <= a.length - b.length; ++i) {
+            bool matches = true;
+            for (uint256 j; j < b.length; ++j) {
+                if (a[i + j] != b[j]) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) ++count;
+        }
     }
 }

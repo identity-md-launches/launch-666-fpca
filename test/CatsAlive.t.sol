@@ -100,8 +100,6 @@ contract CatsAliveTest is Test {
         vm.expectRevert();
         new CatsAlive(OWNER, REPORTER, ORIGINAL_CATS, 0, MAX_AGE);
         vm.expectRevert();
-        new CatsAlive(OWNER, REPORTER, ORIGINAL_CATS, uint64(block.timestamp + 1), MAX_AGE);
-        vm.expectRevert();
         new CatsAlive(OWNER, REPORTER, ORIGINAL_CATS, ORIGINAL_TIMESTAMP, 59);
         vm.expectRevert();
         new CatsAlive(OWNER, REPORTER, ORIGINAL_CATS, ORIGINAL_TIMESTAMP, uint32(7 days + 1));
@@ -217,6 +215,25 @@ contract CatsAliveTest is Test {
         assertEq(cats.balanceOf(address(receiver)), 1);
         receiver.mint();
         assertEq(cats.totalSupply(), 2);
+    }
+
+    function test_codeBearingCallerNeedsReceiverHookAndCanMintAfterCodeRemoval() public {
+        _mint(ALICE);
+        // Models the receiver-check behavior of a delegated EOA whose code
+        // lacks onERC721Received; this is not a live EIP-7702 transaction.
+        vm.etch(ALICE, type(NonReceiver).runtimeCode);
+        vm.prank(ALICE);
+        vm.expectRevert(abi.encodeWithSignature("ERC721InvalidReceiver(address)", ALICE));
+        cats.mint();
+        assertEq(cats.totalSupply(), 1);
+        assertEq(cats.balanceOf(ALICE), 1);
+        assertEq(cats.ownerOf(1), ALICE);
+
+        vm.etch(ALICE, hex"");
+        _mint(ALICE);
+        assertEq(cats.totalSupply(), 2);
+        assertEq(cats.balanceOf(ALICE), 2);
+        assertEq(cats.ownerOf(2), ALICE);
     }
 
     function test_pauseOnlyStopsMintAndDoesNotFreezeTransfersOrReports() public {

@@ -53,8 +53,8 @@ contract CatsAlive is ERC721, Ownable2Step, Pausable, ReentrancyGuard {
     ) ERC721("FPCA", "FPCA") Ownable(initialOwner) {
         if (
             initialReporter == address(0) || originalCats_ == 0 || originalCats_ > MAX_CATS
-                || originalMintTimestamp_ == 0 || originalMintTimestamp_ > block.timestamp
-                || originalMintTimestamp_ >= 4_102_444_800 || maxReportAge_ < 60 || maxReportAge_ > 7 days
+                || originalMintTimestamp_ == 0 || originalMintTimestamp_ >= 4_102_444_800 || maxReportAge_ < 60
+                || maxReportAge_ > 7 days
         ) revert InvalidConfiguration();
         reporter = initialReporter;
         originalCats = originalCats_;
